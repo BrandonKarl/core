@@ -36,7 +36,7 @@ from homeassistant.const import (
     TEMP_FAHRENHEIT,
     __version__,
 )
-from homeassistant.core import Context, callback as ha_callback, split_entity_id
+from homeassistant.core import Context, Event, callback as ha_callback, split_entity_id
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util.decorator import Registry
 
@@ -183,7 +183,7 @@ def get_accessory(hass, driver, state, aid, config):  # noqa: C901
     elif state.domain == "remote" and features & SUPPORT_ACTIVITY:
         a_type = "ActivityRemote"
 
-    elif state.domain in ("automation", "input_boolean", "remote", "scene", "script"):
+    elif state.domain in ("input_boolean", "remote", "scene", "script"):
         a_type = "Switch"
 
     elif state.domain == "water_heater":
@@ -191,6 +191,9 @@ def get_accessory(hass, driver, state, aid, config):  # noqa: C901
 
     elif state.domain == "camera":
         a_type = "Camera"
+
+    elif state.domain == "automation":
+        a_type = "Button"
 
     if a_type is None:
         return None
@@ -307,47 +310,67 @@ class HomeAccessory(Accessory):
     async def run(self):
         """Handle accessory driver started event."""
         state = self.hass.states.get(self.entity_id)
-        self.async_update_state_callback(state)
-        self._subscriptions.append(
-            async_track_state_change_event(
-                self.hass, [self.entity_id], self.async_update_event_state_callback
-            )
-        )
-
-        battery_charging_state = None
-        battery_state = None
-        if self.linked_battery_sensor:
-            linked_battery_sensor_state = self.hass.states.get(
-                self.linked_battery_sensor
-            )
-            battery_state = linked_battery_sensor_state.state
-            battery_charging_state = linked_battery_sensor_state.attributes.get(
-                ATTR_BATTERY_CHARGING
-            )
+        if state.domain != "automation":
+            self.async_update_state_callback(state)
             self._subscriptions.append(
                 async_track_state_change_event(
-                    self.hass,
-                    [self.linked_battery_sensor],
-                    self.async_update_linked_battery_callback,
+                    self.hass, [self.entity_id], self.async_update_event_state_callback
                 )
             )
-        elif state is not None:
-            battery_state = state.attributes.get(ATTR_BATTERY_LEVEL)
-        if self.linked_battery_charging_sensor:
-            state = self.hass.states.get(self.linked_battery_charging_sensor)
-            battery_charging_state = state and state.state == STATE_ON
-            self._subscriptions.append(
-                async_track_state_change_event(
-                    self.hass,
-                    [self.linked_battery_charging_sensor],
-                    self.async_update_linked_battery_charging_callback,
-                )
-            )
-        elif battery_charging_state is None and state is not None:
-            battery_charging_state = state.attributes.get(ATTR_BATTERY_CHARGING)
 
-        if battery_state is not None or battery_charging_state is not None:
-            self.async_update_battery(battery_state, battery_charging_state)
+            battery_charging_state = None
+            battery_state = None
+            if self.linked_battery_sensor:
+                linked_battery_sensor_state = self.hass.states.get(
+                    self.linked_battery_sensor
+                )
+                battery_state = linked_battery_sensor_state.state
+                battery_charging_state = linked_battery_sensor_state.attributes.get(
+                    ATTR_BATTERY_CHARGING
+                )
+                self._subscriptions.append(
+                    async_track_state_change_event(
+                        self.hass,
+                        [self.linked_battery_sensor],
+                        self.async_update_linked_battery_callback,
+                    )
+                )
+            elif state is not None:
+                battery_state = state.attributes.get(ATTR_BATTERY_LEVEL)
+            if self.linked_battery_charging_sensor:
+                state = self.hass.states.get(self.linked_battery_charging_sensor)
+                battery_charging_state = state and state.state == STATE_ON
+                self._subscriptions.append(
+                    async_track_state_change_event(
+                        self.hass,
+                        [self.linked_battery_charging_sensor],
+                        self.async_update_linked_battery_charging_callback,
+                    )
+                )
+            elif battery_charging_state is None and state is not None:
+                battery_charging_state = state.attributes.get(ATTR_BATTERY_CHARGING)
+
+            if battery_state is not None or battery_charging_state is not None:
+                self.async_update_battery(battery_state, battery_charging_state)
+        else:
+
+            @ha_callback
+            def _async_event_filter(event: Event) -> bool:
+                """Filter state changes by entity_id."""
+                return event.data.get("entity_id") == self.entity_id
+
+            @ha_callback
+            def _async_event_dispatcher(self, event: Event) -> None:
+                """Dispatch state changes by entity_id."""
+                self.async_update_state_callback()
+
+            self._subscriptions.append(
+                self.hass.bus.async_listen(
+                    "automation_triggered",
+                    _async_event_dispatcher,
+                    event_filter=_async_event_filter,
+                )
+            )
 
     @ha_callback
     def async_update_event_state_callback(self, event):

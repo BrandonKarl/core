@@ -152,6 +152,23 @@ class Switch(HomeAccessory):
             self.char_on.set_value(current_state)
 
 
+@TYPES.register("Button")
+class Button(HomeAccessory):
+    """Generate a Button accessory."""
+
+    def __init__(self, *args):
+        """Initialize a Switch accessory object."""
+        super().__init__(*args, category=15)
+
+        serv_prog = self.add_preload_service("StatelessProgrammableSwitch")
+        self.char_event = serv_prog.configure_char("ProgrammableSwitchEvent")
+
+    @callback
+    def async_update_state(self):
+        """Fire button when automation triggered."""
+        self.char_event.set_value(0)
+
+
 @TYPES.register("Vacuum")
 class Vacuum(Switch):
     """Generate a Switch accessory."""
